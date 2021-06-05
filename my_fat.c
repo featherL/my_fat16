@@ -218,7 +218,7 @@ int my_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
             stbuf->st_mode = S_IFDIR | 0755;
             stbuf->st_nlink = 1;
         } else {
-            stbuf->st_mode = 0555 | S_IFREG;
+            stbuf->st_mode = 0666 | S_IFREG;
             stbuf->st_nlink = 1;
             stbuf->st_size = file->size;
         }
@@ -319,7 +319,6 @@ int my_open(const char *path, struct fuse_file_info *fi)
 
 int my_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
-
     fuse_log(FUSE_LOG_INFO, "create: %s\n", path);
 
     (void) mode;
@@ -377,6 +376,7 @@ int my_create(const char *path, mode_t mode, struct fuse_file_info *fi)
 
     memset(file, 0, sizeof(struct FCB));
     memset(file->filename, ' ', MAX_FILENAME);
+    memset(file->extname, ' ', MAX_EXTNAME);
     memcpy(file->filename, name, strlen(name));
     file->first_cluster = CLUSTER_END;
 
@@ -583,11 +583,26 @@ int my_mkdir(const char *path, mode_t mode)
         return -ENFILE;
 
     memset(file, 0, sizeof(struct FCB));
-    memset(file->filename, ' ', MAX_FILENAME);
-    memcpy(file->filename, name, strlen(name));
+    memset(file->filename, ' ', MAX_FILENAME + MAX_EXTNAME);
     file->first_cluster = CLUSTER_END;
     file->metadata = (file->metadata | META_DIRECTORY);
 
+    struct FCB *item = (struct FCB *)get_cluster(file_new_cluster(file, 1));
+    if (item == NULL)
+        return -ENOSPC;
+
+    // 设置当前目录 .
+    memset(item[0].filename, ' ', MAX_EXTNAME + MAX_EXTNAME);
+    memcpy(item[0].filename, ".", 1);
+    item[0].first_cluster = file->first_cluster;
+    item[0].metadata |= META_DIRECTORY;
+
+    // 设置父目录 ..
+    memcpy(&item[1], &item[0], sizeof(struct FCB));
+    memcpy(item[1].filename, "..", 2);
+    item[1].first_cluster = 0;
+
+    memcpy(file->filename, name, strlen(name));
     return 0;
 }
 
@@ -874,7 +889,7 @@ int is_directory_empty(const struct FCB *file)
                 break;
             }
 
-            if (is_entry_exists(&dir[i]))
+            if (dir[i].filename[0] != '.' && is_entry_exists(&dir[i]))
                 return 0;
         }
 

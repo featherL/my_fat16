@@ -26,7 +26,7 @@
 
 #define BYTES_PER_SECTOR        512
 #define NUMBER_OF_FAT           2
-#define SECTORS_PER_CLUSTER     1
+#define SECTORS_PER_CLUSTER     32
 #define RESERVED_SECTOR         1
 #define ROOT_ENTRIES            512
 #define SECTORS_PER_FAT         9
@@ -40,7 +40,7 @@
 #define ROOT_SECTORS    ((ROOT_ENTRIES * sizeof(struct FCB) + BYTES_PER_SECTOR - 1) / BYTES_PER_SECTOR)
 
 // 数据区扇区数
-#define DATA_SECTORS    0x1000
+#define DATA_SECTORS  (0x100 * SECTORS_PER_CLUSTER)
 
 // 除了数据区外，占用的扇区数
 #define HEADER_SECTORS (ROOT_SECTORS + NUMBER_OF_FAT * SECTORS_PER_FAT + RESERVED_SECTOR)
@@ -120,6 +120,7 @@ struct FCB {
 }__attribute__((packed));
 
 #define MAX_FILENAME sizeof(((struct FCB *)0)->filename)
+#define MAX_EXTNAME sizeof(((struct FCB *)0)->extname)
 
 // FAT 表项
 struct FAT {
