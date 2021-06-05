@@ -41,6 +41,7 @@ static const struct fuse_operations my_fat_ops = {
     .rmdir = my_rmdir,
 //    .releasedir = my_releasedir,
     .destroy = my_destroy,
+    .access = my_access,
 };
 
 

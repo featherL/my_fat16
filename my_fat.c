@@ -119,7 +119,7 @@ struct FCB *find_file(struct FCB *root, uint32_t entries, const char *path, int 
             struct FCB *ret = NULL;
 
             uint32_t new_entries = BYTES_PER_SECTOR * SECTORS_PER_CLUSTER / sizeof(struct FCB);
-            uint32_t cur_cluster = file->first_cluster;
+            uint16_t cur_cluster = file->first_cluster;
             struct FCB *new_root;
             int err_code = -1;
 
@@ -199,6 +199,10 @@ int my_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
     (void) fi;
 
     memset(stbuf, 0, sizeof(struct stat));
+
+    stbuf->st_uid = 0;
+    stbuf->st_gid = 0;
+
     if (strcmp(path, "/") == 0) {
         stbuf->st_mode = S_IFDIR | 0755;
         stbuf->st_nlink = 2;
@@ -213,13 +217,9 @@ int my_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
         } else if (file->metadata & META_DIRECTORY) {
             stbuf->st_mode = S_IFDIR | 0755;
             stbuf->st_nlink = 1;
-            stbuf->st_uid = 1000;
-            stbuf->st_gid = 1000;
         } else {
-            stbuf->st_mode = 0444 | S_IFREG;
+            stbuf->st_mode = 0555 | S_IFREG;
             stbuf->st_nlink = 1;
-            stbuf->st_uid = 1000;
-            stbuf->st_gid = 1000;
             stbuf->st_size = file->size;
         }
     }
@@ -251,7 +251,7 @@ int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset
         if (file == NULL)
             return -ENOENT;
 
-        uint32_t cur_cluster = file->first_cluster;
+        uint16_t cur_cluster = file->first_cluster;
         entries = CLUSTER_SIZE / sizeof(struct FCB);
 
         int stop = 0;
@@ -353,7 +353,7 @@ int my_create(const char *path, mode_t mode, struct fuse_file_info *fi)
         if (err_code != 0)
             return err_code;
 
-        uint32_t cur_cluster = dir_file->first_cluster;
+        uint16_t cur_cluster = dir_file->first_cluster;
         uint32_t entries = CLUSTER_SIZE / sizeof(struct FCB);
 
         struct FCB *dir = NULL;
@@ -368,7 +368,7 @@ int my_create(const char *path, mode_t mode, struct fuse_file_info *fi)
         }
 
         if (file == NULL) { // 给目录文件扩个容
-            file = (struct FCB *)file_new_cluster(dir_file);
+            file = (struct FCB *) get_cluster(file_new_cluster(dir_file, 1));
         }
     }
 
@@ -501,7 +501,6 @@ int my_statfs(const char *path, struct statvfs *sfs)
     sfs->f_bavail = sfs->f_bfree;
     sfs->f_fsid = 0x1234;
 
-
     return 0;
 }
 
@@ -561,7 +560,7 @@ int my_mkdir(const char *path, mode_t mode)
         if (err_code != 0)
             return err_code;
 
-        uint32_t cur_cluster = dir_file->first_cluster;
+        uint16_t cur_cluster = dir_file->first_cluster;
         uint32_t entries = CLUSTER_SIZE / sizeof(struct FCB);
 
         struct FCB *dir = NULL;
@@ -576,7 +575,7 @@ int my_mkdir(const char *path, mode_t mode)
         }
 
         if (file == NULL) { // 给目录文件扩个容
-            file = (struct FCB *) file_new_cluster(dir_file);
+            file = (struct FCB *) get_cluster(file_new_cluster(dir_file, 1));
         }
     }
 
@@ -656,7 +655,7 @@ char *get_filename(const struct FCB *file)
 
 char *get_cluster(uint32_t cluster_num)
 {
-    if (cluster_num < 2)
+    if (!is_cluster_inuse(cluster_num))
         return NULL;
 
     // 减 2 是因为数据区的第一个有效簇号是 2
@@ -719,7 +718,7 @@ long long read_file(const struct FCB *fcb, void *buff, uint32_t offset, uint32_t
 {
     size_t pos = 0;
 
-    if (offset == fcb->size)
+    if (offset == fcb->size || length == 0)
         return 0;
 
     if (offset + length < offset)  // 溢出了
@@ -731,16 +730,11 @@ long long read_file(const struct FCB *fcb, void *buff, uint32_t offset, uint32_t
 
     uint16_t cur_cluster_num = fcb->first_cluster;
 
-    assert(is_cluster_inuse(fcb->first_cluster));
-
     // 定位到对应偏移的簇上
     while (offset >= CLUSTER_SIZE) {
-        if (is_cluster_inuse(g_fat[0][cur_cluster_num].cluster)) {
-            cur_cluster_num = g_fat[0][cur_cluster_num].cluster;
-            offset -= CLUSTER_SIZE;
-        } else {
-            return -EINVAL;  // 文件的大小不对
-        }
+        assert(is_cluster_inuse(cur_cluster_num));
+        cur_cluster_num = g_fat[0][cur_cluster_num].cluster;
+        offset -= CLUSTER_SIZE;
     }
 
     char *src = get_cluster(cur_cluster_num);
@@ -748,16 +742,15 @@ long long read_file(const struct FCB *fcb, void *buff, uint32_t offset, uint32_t
 
     src += offset;
     uint32_t n = CLUSTER_SIZE - offset;
-    while (length > CLUSTER_SIZE &&
-           is_cluster_inuse(cur_cluster_num)) {
+    while (length > CLUSTER_SIZE) {
         memcpy(buff + pos, src, n);
         length -= n;
         pos += n;
 
-        cur_cluster_num = g_fat[0][cur_cluster_num].cluster;
         src = get_cluster(cur_cluster_num);
         assert(src != NULL);
 
+        cur_cluster_num = g_fat[0][cur_cluster_num].cluster;
         n = CLUSTER_SIZE;
     }
 
@@ -770,52 +763,104 @@ long long read_file(const struct FCB *fcb, void *buff, uint32_t offset, uint32_t
 
 long long write_file(struct FCB *fcb, const void *buff, uint32_t offset, uint32_t length)
 {
-    abort();
-
     if (length == 0)
         return 0;
 
     if (offset + length < offset)  // 溢出了
         return -EINVAL;
 
-    if (!is_cluster_inuse(fcb->first_cluster))
-        fcb->first_cluster = get_free_cluster_num();
+    // 若文件为空，写入数据后占用簇的数量
+    uint32_t write_cluster_count = (offset + length + CLUSTER_SIZE - 1) / CLUSTER_SIZE;
 
-    if (fcb->first_cluster == CLUSTER_END) // 没有空余的空间了
-        return -ENOSPC;
+    // 原有文件大小占用的簇的数量
+    uint32_t now_cluster_count = get_cluster_count(fcb);
 
+    // 若文件为空，写入数据后文件的大小
+    uint32_t write_size = offset + length;
 
-    uint32_t cur_cluster = fcb->first_cluster;
+    // 原有文件大小
+    uint32_t now_size = fcb->size;
+
+    // 需要扩容
+    if (write_cluster_count > now_cluster_count) {
+        if (CLUSTER_END == file_new_cluster(fcb, write_cluster_count - now_cluster_count))
+            return -ENOSPC;
+    }
+
+    // 文件大小需要更改
+    if (write_size > now_size)
+        fcb->size = write_size;
+
+    uint16_t cur = fcb->first_cluster;
+
+    // 定位到偏移对应的起始簇
     while (offset >= CLUSTER_SIZE) {
-        if (is_cluster_inuse(g_fat[0][cur_cluster].cluster)) {
-            cur_cluster = g_fat[0][cur_cluster].cluster;
-        } else {
+        assert(is_cluster_inuse(cur));
 
-        }
-
+        cur = g_fat[0][cur].cluster;
         offset -= CLUSTER_SIZE;
     }
 
+    size_t pos = 0;
+    char *dst = get_cluster(cur);
+    assert(dst != NULL);
 
-    return 0;
-}
+    dst += offset;
 
-uint32_t get_free_cluster_num()
-{
-    for (size_t i = 0; i < SECTORS_PER_FAT / sizeof(struct FAT); i++) {
-        if (g_fat[0][i].cluster == CLUSTER_FREE) {
-            g_fat[0][i].cluster = CLUSTER_END;
-            return i;
-        }
+    uint32_t n = CLUSTER_SIZE - offset;
+
+    while (length > CLUSTER_SIZE) {
+        memcpy(dst, buff+pos, n);
+        length -= n;
+        pos += n;
+
+        cur = g_fat[0][cur].cluster;
+        dst = get_cluster(cur);
+        assert(dst != NULL);
+
+        n = CLUSTER_SIZE;
     }
 
-    return CLUSTER_END;
+    // 剩下不足一簇的数据
+    memcpy(dst, buff+pos, length);
+    pos += length;
+
+    return pos;
+}
+
+uint16_t get_free_cluster_num(uint32_t count)
+{
+    if (count == 0)
+        return CLUSTER_END;
+
+    uint16_t first = CLUSTER_END;
+
+    while (count--) {
+        size_t i;
+        for (i = 0; i < SECTORS_PER_FAT / sizeof(struct FAT); i++) {
+            if (g_fat[0][i].cluster == CLUSTER_FREE && get_cluster(i) != NULL) {
+                g_fat[0][i].cluster = first;
+                break;
+            }
+        }
+
+        if (i == SECTORS_PER_FAT / sizeof(struct FAT)) {
+            // 不足够分配所需的簇，释放之前分配的簇
+            release_cluster(first);
+            return CLUSTER_END;
+        }
+
+        first = i;
+    }
+
+
+    return first;
 }
 
 int is_directory_empty(const struct FCB *file)
 {
     uint32_t entries = CLUSTER_SIZE / sizeof(struct FCB);
-    uint32_t cur_cluster = file->first_cluster;
+    uint16_t cur_cluster = file->first_cluster;
 
     struct FCB *dir = NULL;
     int stop = 0;
@@ -839,32 +884,36 @@ int is_directory_empty(const struct FCB *file)
     return 1;
 }
 
-char *file_new_cluster(struct FCB *file)
+uint16_t file_new_cluster(struct FCB *file, uint32_t count)
 {
     // 分配新的簇，并初始化
-    uint32_t new_cluster = get_free_cluster_num();
+    uint16_t new_cluster = get_free_cluster_num(count);
     if (new_cluster == CLUSTER_END)  // 没有空间可用了
-        return NULL;
-    char *p = get_cluster(new_cluster);
+        return CLUSTER_END;
 
-    if (p == NULL)
-        return NULL;
+    uint16_t cur = new_cluster;
+    char *p = NULL;
+    while (is_cluster_inuse(cur)) {
+        p = get_cluster(cur);
+        assert(p != NULL);
+        memset(p, 0, CLUSTER_SIZE);
 
-    memset(p, 0, CLUSTER_SIZE);
+        cur = g_fat[0][cur].cluster;
+    }
 
     // 从未有簇
     if (is_cluster_inuse(file->first_cluster)) {
-        uint32_t cur_cluster = file->first_cluster;
+        cur = file->first_cluster;
 
-        while (is_cluster_inuse(g_fat[0][cur_cluster].cluster)) {
-            cur_cluster = g_fat[0][cur_cluster].cluster;
+        while (is_cluster_inuse(g_fat[0][cur].cluster)) {
+            cur = g_fat[0][cur].cluster;
         }
-        g_fat[0][cur_cluster].cluster = new_cluster;
+        g_fat[0][cur].cluster = new_cluster;
     } else {  // 从未分配
         file->first_cluster = new_cluster;
     }
 
-    return p;
+    return new_cluster;
 }
 
 void remove_file(struct FCB *file)
@@ -883,5 +932,25 @@ void release_cluster(uint32_t first_num)
 
         g_fat[0][first_num].cluster = CLUSTER_FREE;
     }
+}
+
+uint32_t get_cluster_count(const struct FCB *file)
+{
+    uint32_t count = 0;
+    uint16_t cur = file->first_cluster;
+
+    while (is_cluster_inuse(cur)) {
+        count++;
+        cur = g_fat[0][cur].cluster;
+    }
+
+    return count;
+}
+
+int my_access(const char *path, int flags)
+{
+    (void )path;
+    (void )flags;
+    return 0;
 }
 

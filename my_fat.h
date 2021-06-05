@@ -215,10 +215,11 @@ int is_filename_available(const char *filename);
 struct FCB *get_free_entry(struct FCB *dir, uint32_t entries);
 
 /**
- * 获取可用的簇号
- * @return 占用一个可用的簇号并返回，若为 CLUSTER_END 表示已无可用的簇号
+ * 获取可用的簇，返回起始的簇号
+ * @param count 分配多少个簇
+ * @return 若为 CLUSTER_END 表示已无可用的簇号，反之返回起始的簇号
  */
-uint32_t get_free_cluster_num();
+uint16_t get_free_cluster_num(uint32_t count);
 
 /**
  * 判断目录是否为空
@@ -230,9 +231,9 @@ int is_directory_empty(const struct FCB *file);
 /**
  * 给文件新增一个簇
  * @param file 文件对应的 FCB 指针
- * @return 返回簇的起始地址，调用失败则返回 NULL
+ * @return 返回第一个簇的簇号，失败则返回 CLUSTER_END
  */
-char *file_new_cluster(struct FCB *file);
+uint16_t file_new_cluster(struct FCB *file, uint32_t count);
 
 
 /**
@@ -246,6 +247,13 @@ void remove_file(struct FCB *file);
  * @param first_num 文件的第一个簇号
  */
 void release_cluster(uint32_t first_num);
+
+/**
+ * 获取文件占用的簇的数量
+ * @param file 文件对应的 FCB 指针
+ * @return 返回文件占用的簇的数量
+ */
+uint32_t get_cluster_count(const struct FCB *file);
 
 // fuse {
 
@@ -289,7 +297,7 @@ int my_releasedir(const char *, struct fuse_file_info *);
 
 void my_destroy(void *);
 
-
+int my_access(const char *, int);
 // fuse }
 
 #endif //MYFAT_MY_FAT_H
