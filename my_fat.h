@@ -174,7 +174,7 @@ char *get_filename(const struct FCB *file);
 /**
  * 根据簇号，获取指向该簇的内存指针
  * @param cluster_num 簇号
- * @return 返回簇的起始地址
+ * @return 返回簇的起始地址，失败则返回 NULL
  */
 char *get_cluster(uint32_t cluster_num);
 

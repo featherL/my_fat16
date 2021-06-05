@@ -125,6 +125,9 @@ struct FCB *find_file(struct FCB *root, uint32_t entries, const char *path, int 
 
             while (is_cluster_inuse(cur_cluster) && err_code != 0 && ret == NULL) {
                 new_root = (struct FCB *) get_cluster(cur_cluster);
+
+                assert(new_root != NULL);
+
                 ret = find_file(new_root, new_entries, next, &err_code);
                 cur_cluster = g_fat[0][cur_cluster].cluster;    // 下一个簇号
             }
@@ -253,8 +256,10 @@ int my_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t offset
 
         int stop = 0;
 
-        while (cur_cluster >= 2 && cur_cluster <= 0xFFEF && !stop) {
+        while (is_cluster_inuse(cur_cluster) && !stop) {
             item = (struct FCB *) get_cluster(cur_cluster);
+
+            assert(item != NULL);
 
             for (size_t i = 0; i < entries; i++) {
                 if (is_entry_end(&item[i])) {
@@ -355,6 +360,9 @@ int my_create(const char *path, mode_t mode, struct fuse_file_info *fi)
         file = NULL;
         while (is_cluster_inuse(cur_cluster) && file == NULL) {
             dir = (struct FCB *) get_cluster(cur_cluster);
+
+            assert(dir != NULL);
+
             file = get_free_entry(dir, entries);
             cur_cluster = g_fat[0][cur_cluster].cluster;
         }
@@ -560,6 +568,9 @@ int my_mkdir(const char *path, mode_t mode)
         file = NULL;
         while (is_cluster_inuse(cur_cluster) && file == NULL) {
             dir = (struct FCB *) get_cluster(cur_cluster);
+
+            assert(dir != NULL);
+
             file = get_free_entry(dir, entries);
             cur_cluster = g_fat[0][cur_cluster].cluster;
         }
@@ -645,9 +656,15 @@ char *get_filename(const struct FCB *file)
 
 char *get_cluster(uint32_t cluster_num)
 {
-    // 减 2 是因为数据区的有效簇号是 2
+    if (cluster_num < 2)
+        return NULL;
+
+    // 减 2 是因为数据区的第一个有效簇号是 2
     char *cluster = ((char *) g_root_dir + (ROOT_ENTRIES * sizeof(struct FCB)) +
                      (cluster_num - 2) * CLUSTER_SIZE);
+
+    if (cluster > g_addr + g_size)
+        return NULL;
 
     return cluster;
 }
@@ -726,7 +743,10 @@ long long read_file(const struct FCB *fcb, void *buff, uint32_t offset, uint32_t
         }
     }
 
-    char *src = get_cluster(cur_cluster_num) + offset;
+    char *src = get_cluster(cur_cluster_num);
+    assert(src != NULL);
+
+    src += offset;
     uint32_t n = CLUSTER_SIZE - offset;
     while (length > CLUSTER_SIZE &&
            is_cluster_inuse(cur_cluster_num)) {
@@ -736,6 +756,8 @@ long long read_file(const struct FCB *fcb, void *buff, uint32_t offset, uint32_t
 
         cur_cluster_num = g_fat[0][cur_cluster_num].cluster;
         src = get_cluster(cur_cluster_num);
+        assert(src != NULL);
+
         n = CLUSTER_SIZE;
     }
 
@@ -799,6 +821,8 @@ int is_directory_empty(const struct FCB *file)
     int stop = 0;
     while (is_cluster_inuse(cur_cluster) && !stop) {
         dir = (struct FCB *) get_cluster(cur_cluster);
+        assert(dir != NULL);
+
         for (size_t i = 0; i < entries; i++) {
             if (is_entry_end(&dir[i])) {
                 stop = 1;
