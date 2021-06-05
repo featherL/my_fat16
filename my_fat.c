@@ -215,7 +215,7 @@ int my_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
         } else if ((file->metadata & META_VOLUME_LABEL)) {
             res = -ENOENT;
         } else if (file->metadata & META_DIRECTORY) {
-            stbuf->st_mode = S_IFDIR | 0755;
+            stbuf->st_mode = S_IFDIR | 0777;
             stbuf->st_nlink = 1;
         } else {
             stbuf->st_mode = 0666 | S_IFREG;
@@ -852,14 +852,14 @@ uint16_t get_free_cluster_num(uint32_t count)
 
     while (count--) {
         size_t i;
-        for (i = 0; i < SECTORS_PER_FAT / sizeof(struct FAT); i++) {
+        for (i = 0; i < SECTORS_PER_FAT * BYTES_PER_SECTOR / sizeof(struct FAT); i++) {
             if (g_fat[0][i].cluster == CLUSTER_FREE && get_cluster(i) != NULL) {
                 g_fat[0][i].cluster = first;
                 break;
             }
         }
 
-        if (i == SECTORS_PER_FAT / sizeof(struct FAT)) {
+        if (i == SECTORS_PER_FAT * BYTES_PER_SECTOR / sizeof(struct FAT)) {
             // 不足够分配所需的簇，释放之前分配的簇
             release_cluster(first);
             return CLUSTER_END;
