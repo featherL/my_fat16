@@ -218,7 +218,7 @@ int my_getattr(const char *path, struct stat *stbuf, struct fuse_file_info *fi)
             stbuf->st_mode = S_IFDIR | 0777;
             stbuf->st_nlink = 1;
         } else {
-            stbuf->st_mode = 0666 | S_IFREG;
+            stbuf->st_mode = 0777 | S_IFREG;
             stbuf->st_nlink = 1;
             stbuf->st_size = file->size;
         }
@@ -495,7 +495,7 @@ int my_statfs(const char *path, struct statvfs *sfs)
     memset(sfs, 0, sizeof(struct statvfs));
     sfs->f_bsize = CLUSTER_SIZE;
     sfs->f_frsize = sfs->f_bsize;
-    sfs->f_blocks = DRIVE_SIZE;
+    sfs->f_blocks = DRIVE_SIZE / sfs->f_bsize;
     sfs->f_namemax = MAX_FILENAME;
     sfs->f_bfree = (DRIVE_SIZE - HEADER_SECTORS * BYTES_PER_SECTOR) / sfs->f_bsize;
     sfs->f_bavail = sfs->f_bfree;
