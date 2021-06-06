@@ -517,6 +517,7 @@ int my_rename(const char *name, const char *new_name, unsigned int flags)
             return -ENOTEMPTY;
         else
         {
+            release_cluster(new_file->first_cluster);
             memcpy(new_file, file, sizeof(struct FCB));
             remove_file(file);
             return 0;
@@ -570,7 +571,8 @@ int my_rename(const char *name, const char *new_name, unsigned int flags)
             return -ENFILE;
 
         memcpy(new_file, file, sizeof(struct FCB));
-	memcpy(new_file->filename, new_filename, strlen(new_filename));
+        memset(new_file->filename, ' ', MAX_FILENAME + MAX_EXTNAME);
+        memcpy(new_file->filename, new_filename, strlen(new_filename));
         remove_file(file);
         return 0;
     }
