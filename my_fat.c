@@ -86,7 +86,8 @@ struct FCB *find_file(struct FCB *root, uint32_t entries, const char *path, int 
     assert(error_code != NULL);
     *error_code = 0;
 
-    if (name == NULL) {
+    if (name == NULL) { // 路径是根目录的情况
+        *error_code = -ENOENT;
         return NULL;
     }
 
@@ -300,7 +301,7 @@ int my_open(const char *path, struct fuse_file_info *fi)
 {
     fuse_log(FUSE_LOG_INFO, "open: %s\n", path);
 
-    const struct FCB *file = NULL;
+    struct FCB *file = NULL;
 
     if (strcmp("/", path) == 0)
         return 0;
@@ -311,8 +312,12 @@ int my_open(const char *path, struct fuse_file_info *fi)
     if (err != 0)
         return err;
 
-    if (file == NULL || (file->metadata & META_VOLUME_LABEL))
-        return -ENOENT;  // 未找到文件
+    if (file == NULL || (file->metadata & META_VOLUME_LABEL)) // 未找到文件
+        return -ENOENT;
+
+    int ret;
+    if (fi->flags & O_TRUNC && 0 != (ret = _truncate(file, 0)))
+        return ret;
 
     return 0;  // 找到文件了
 }
@@ -322,6 +327,7 @@ int my_create(const char *path, mode_t mode, struct fuse_file_info *fi)
     fuse_log(FUSE_LOG_INFO, "create: %s\n", path);
 
     (void) mode;
+    (void) fi;
 
     if (strcmp(path, "/") == 0)
         return -EINVAL;
@@ -435,8 +441,6 @@ int my_write(const char *path, const char *buf, size_t size, off_t offset, struc
 {
     fuse_log(FUSE_LOG_INFO, "write: %s\n", path);
 
-    (void) fi;
-
     if (strcmp(path, "/") == 0)
         return -EISDIR;
 
@@ -452,37 +456,77 @@ int my_write(const char *path, const char *buf, size_t size, off_t offset, struc
     if (size > INT32_MAX)
         return -EINVAL;
 
+    int ret = (int) write_file(file, buf, offset, size);
 
-    return (int) write_file(file, buf, offset, size);
+//    if (fi->flags & O_APPEND)
+//        return ret;
+//
+//    // 仅仅是写，则表示覆盖
+//    int err;
+//    if (0 != (err = _truncate(file, offset + size)))
+//        return err;
+
+    return ret;
 }
 
 int my_flush(const char *path, struct fuse_file_info *fi)
 {
+    fuse_log(FUSE_LOG_INFO, "flush: %s\n", path);
+
+    (void) fi;
+
     return 0;
 }
 
 int my_release(const char *path, struct fuse_file_info *fi)
 {
+    fuse_log(FUSE_LOG_INFO, "release: %s\n", path);
+
+    (void) fi;
+
     return 0;
 }
 
 int my_truncate(const char *path, off_t offset, struct fuse_file_info *fi)
 {
-    return 0;
+    fuse_log(FUSE_LOG_INFO, "truncate: %s\n", path);
+
+    (void) fi;
+
+    int err_code;
+    struct FCB *file = find_file(g_root_dir, ROOT_ENTRIES, path, &err_code);
+
+    if (err_code != 0)
+        return err_code;
+
+    return _truncate(file, offset);
 }
 
 int my_rename(const char *name, const char *new_name, unsigned int flags)
 {
+    fuse_log(FUSE_LOG_INFO, "rename: %s %s\n", name, new_name);
+
     return 0;
 }
 
 int my_chmod(const char *path, mode_t mode, struct fuse_file_info *fi)
 {
+    fuse_log(FUSE_LOG_INFO, "chmod: %s\n", path);
+
+    (void) mode;
+    (void) fi;
+
     return 0;
 }
 
 int my_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi)
 {
+    fuse_log(FUSE_LOG_INFO, "chown: %s\n", path);
+
+    (void) uid;
+    (void) gid;
+    (void) fi;
+
     return 0;
 }
 
@@ -587,7 +631,7 @@ int my_mkdir(const char *path, mode_t mode)
     file->first_cluster = CLUSTER_END;
     file->metadata = (file->metadata | META_DIRECTORY);
 
-    struct FCB *item = (struct FCB *)get_cluster(file_new_cluster(file, 1));
+    struct FCB *item = (struct FCB *) get_cluster(file_new_cluster(file, 1));
     if (item == NULL)
         return -ENOSPC;
 
@@ -825,7 +869,7 @@ long long write_file(struct FCB *fcb, const void *buff, uint32_t offset, uint32_
     uint32_t n = CLUSTER_SIZE - offset;
 
     while (length > CLUSTER_SIZE) {
-        memcpy(dst, buff+pos, n);
+        memcpy(dst, buff + pos, n);
         length -= n;
         pos += n;
 
@@ -837,7 +881,7 @@ long long write_file(struct FCB *fcb, const void *buff, uint32_t offset, uint32_
     }
 
     // 剩下不足一簇的数据
-    memcpy(dst, buff+pos, length);
+    memcpy(dst, buff + pos, length);
     pos += length;
 
     return pos;
@@ -916,7 +960,6 @@ uint16_t file_new_cluster(struct FCB *file, uint32_t count)
         cur = g_fat[0][cur].cluster;
     }
 
-    // 从未有簇
     if (is_cluster_inuse(file->first_cluster)) {
         cur = file->first_cluster;
 
@@ -964,8 +1007,89 @@ uint32_t get_cluster_count(const struct FCB *file)
 
 int my_access(const char *path, int flags)
 {
-    (void )path;
-    (void )flags;
+    (void) path;
+    (void) flags;
+    return 0;
+}
+
+int adjust_cluster_count(struct FCB *file, uint32_t new_count)
+{
+    uint32_t old_count = get_cluster_count(file);
+
+    if (old_count == new_count) {
+        return 0;
+    } else if (old_count > new_count) { // 缩减
+        uint16_t cur = file->first_cluster;
+        uint16_t pre = CLUSTER_END;
+
+        assert(cur != CLUSTER_END);
+        uint32_t counter = new_count;
+        while (counter > 0) {
+            assert(is_cluster_inuse(cur));
+
+            counter--;
+            pre = cur;
+            cur = g_fat[0][cur].cluster;
+        }
+
+        if (pre == CLUSTER_END) { // new_count = 0
+            file->first_cluster = CLUSTER_END;
+        } else {
+            g_fat[0][pre].cluster = CLUSTER_END;
+        }
+
+        release_cluster(cur);
+    } else { // 扩容
+        if (CLUSTER_END == file_new_cluster(file, new_count - old_count))
+            return -ENOSPC;
+    }
+
+    return 0;
+}
+
+int _truncate(struct FCB *file, off_t offset)
+{
+    // 超过文件长度最大值
+    if (offset > UINT32_MAX)
+        return -EFBIG;
+
+    if (file->metadata & META_DIRECTORY)
+        return -EISDIR;
+
+    // 文件大小所需的簇的数量
+//    uint32_t old_cluster_count = (file->size + CLUSTER_SIZE - 1) / CLUSTER_SIZE;
+
+    // 截断后所需的簇的数量
+    uint32_t new_cluster_count = (offset + CLUSTER_SIZE - 1) / CLUSTER_SIZE;
+
+    uint32_t old_size = file->size;
+    uint32_t new_size = offset;
+
+    int ret;
+    if (0 != (ret = adjust_cluster_count(file, new_cluster_count))) {
+        return ret;
+    }
+
+    if (old_size == new_size) {
+        return 0;
+    } else if (old_size < new_size) { // 文件大小增加
+        // 把后面的内容覆盖为 0
+        void *null_buf = malloc(new_size - old_size);
+        if (null_buf == NULL)
+            return -EFAULT;
+
+        memset(null_buf, 0, new_size - old_size);
+        long long n;
+        if (new_size - old_size != (n = write_file(file, null_buf, old_size, new_size - old_size))) {
+            free(null_buf);
+            return (int) n;
+        }
+        free(null_buf);
+    } else { // 文件大小减少
+        // 不用管
+    }
+
+    file->size = new_size;
     return 0;
 }
 

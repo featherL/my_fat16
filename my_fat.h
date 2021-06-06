@@ -160,7 +160,7 @@ long long write_file(struct FCB *fcb, const void *buff, uint32_t offset, uint32_
  * @param root 查找起始目录
  * @param entries 目录的项数
  * @param path 文件路径
- * @param error_code 错误码，为 0 表示无错误，找不到文件置为 -ENOENT，路径中间有非目录则置为 -ENOTDIR
+ * @param error_code 错误码，为 0 表示找到文件了（返回值必定不为NULL），找不到文件置为 -ENOENT，路径中间有非目录则置为 -ENOTDIR
  * @return 返回 FCB 控制块，找不到文件则返回 NULL
  */
 struct FCB *find_file(struct FCB *root, uint32_t entries, const char *path, int *error_code);
@@ -255,6 +255,22 @@ void release_cluster(uint32_t first_num);
  * @return 返回文件占用的簇的数量
  */
 uint32_t get_cluster_count(const struct FCB *file);
+
+/**
+ * 调整文件占用的簇数量
+ * @param file 文件对应的 FCB 指针
+ * @param new_count 新的簇的数量
+ * @return 返回 0 表示成功，其余为错误码
+ */
+int adjust_cluster_count(struct FCB *file, uint32_t new_count);
+
+/**
+ * 文件截断或者扩容
+ * @param file 文件对应的 FCB 指针
+ * @param offset 截断的大小
+ * @return 0 表示成功，其余表示错误
+ */
+int _truncate(struct FCB *file, off_t offset);
 
 // fuse {
 

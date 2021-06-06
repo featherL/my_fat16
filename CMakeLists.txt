@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.17)
 project(myfat C)
 
+add_definitions(-Wall)
 set(CMAKE_C_STANDARD 99)
 add_compile_options(-D_FILE_OFFSET_BITS=64)
 

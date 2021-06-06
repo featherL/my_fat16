@@ -2,20 +2,36 @@
 // Created by xi4oyu on 6/3/21.
 //
 
-#include "my_fat.h"
+#include <fcntl.h>
+#include <stdio.h>
 
-const char *g_filename = "fat16.raw";
-
-int main()
+int main(int argc, char *argv[])
 {
-//    my_init(NULL);
-//    my_destroy(NULL);
-    char path[] = "/";
-    char *name = strtok(path, "/");
+//    if (argc == 3) {
+//        if (rename(argv[1], argv[2]) != 0)
+//            perror("");
+//    }
 
-    while (name != NULL) {
-        printf("%s\n", name);
-        name = strtok(NULL, "/");
+    int flags = 0x8201;
+
+    if (flags & O_WRONLY) {
+        puts("O_WRONLY");
+    }
+
+    if (flags & O_APPEND) {
+        puts("O_APPEND");
+    }
+
+    if (flags & O_TRUNC) {
+        puts("O_TRUNC");
+    }
+
+    if (flags & O_CREAT) {
+        puts("O_CREAT");
+    }
+
+    if (flags & O_RDONLY) {
+        puts("O_RDONLY");
     }
 
     return 0;
