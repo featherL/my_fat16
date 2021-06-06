@@ -504,9 +504,77 @@ int my_truncate(const char *path, off_t offset, struct fuse_file_info *fi)
 
 int my_rename(const char *name, const char *new_name, unsigned int flags)
 {
-    fuse_log(FUSE_LOG_INFO, "rename: %s %s\n", name, new_name);
+    fuse_log(FUSE_LOG_INFO, "rename: %s->%s\n", name, new_name);
 
-    return 0;
+    (void)flags;
+    int err_code, new_err_code;
+    struct FCB *file = find_file(g_root_dir, ROOT_ENTRIES, name, &err_code);
+    struct FCB *new_file = find_file(g_root_dir, ROOT_ENTRIES, new_name, &new_err_code);
+
+    if (new_file != NULL)
+    {
+        if ((file->metadata & META_DIRECTORY) == META_DIRECTORY && !is_directory_empty(new_file))
+            return -ENOTEMPTY;
+        else
+        {
+            memcpy(new_file, file, sizeof(struct FCB));
+            remove_file(file);
+            return 0;
+        }
+    }
+    else
+    {
+        char *tmp = strdup(new_name);
+        char *new_parent = tmp; // 父目录
+        char *new_filename = strrchr(tmp, '/');
+        if (new_filename != NULL)
+            *new_filename++ = '\0';
+        else
+            new_filename = tmp;
+
+        if (!is_filename_available(new_filename))
+            return -EINVAL;
+
+        if (*new_parent == '\0')
+        { // 根目录
+            new_file = get_free_entry(g_root_dir, ROOT_ENTRIES);
+        }
+        else
+        {
+            struct FCB *dir_file = find_file(g_root_dir, ROOT_ENTRIES, new_parent, &err_code);
+            if (err_code != 0)
+                return err_code;
+
+            uint16_t cur_cluster = dir_file->first_cluster;
+            uint32_t entries = CLUSTER_SIZE / sizeof(struct FCB);
+
+            struct FCB *dir = NULL;
+            new_file = NULL;
+            while (is_cluster_inuse(cur_cluster) && new_file == NULL)
+            {
+                dir = (struct FCB *)get_cluster(cur_cluster);
+
+                assert(dir != NULL);
+
+                new_file = get_free_entry(dir, entries);
+                cur_cluster = g_fat[0][cur_cluster].cluster;
+            }
+
+            if (new_file == NULL)
+            { // 给目录文件扩个容
+                new_file = (struct FCB *)get_cluster(file_new_cluster(dir_file, 1));
+            }
+        }
+
+        if (!new_file) // 目录项满了
+            return -ENFILE;
+
+        memcpy(new_file, file, sizeof(struct FCB));
+	memcpy(new_file->filename, new_filename, strlen(new_filename));
+        remove_file(file);
+        return 0;
+    }
+    return -EFAULT;
 }
 
 int my_chmod(const char *path, mode_t mode, struct fuse_file_info *fi)
