@@ -518,8 +518,13 @@ int my_rename(const char *name, const char *new_name, unsigned int flags)
         else
         {
             release_cluster(new_file->first_cluster);
+
+            char tmp[MAX_FILENAME+MAX_EXTNAME];
+            memcpy(tmp, new_file->filename, MAX_FILENAME + MAX_EXTNAME);
             memcpy(new_file, file, sizeof(struct FCB));
-            remove_file(file);
+            memcpy(new_file->filename, tmp, MAX_FILENAME + MAX_EXTNAME);
+
+            file->filename[0] = FILE_DELETE;
             return 0;
         }
     }
@@ -573,7 +578,8 @@ int my_rename(const char *name, const char *new_name, unsigned int flags)
         memcpy(new_file, file, sizeof(struct FCB));
         memset(new_file->filename, ' ', MAX_FILENAME + MAX_EXTNAME);
         memcpy(new_file->filename, new_filename, strlen(new_filename));
-        remove_file(file);
+
+        file->filename[0] = FILE_DELETE;
         return 0;
     }
     return -EFAULT;
